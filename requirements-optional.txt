@@ -1,0 +1,7 @@
+# Optional extras - the app works without them and says what is missing.
+# maigret: second username engine (~3000 sites).  holehe: email checker.
+# python-whois: WHOIS fallback for the Domain tab (RDAP is used first).
+maigret
+holehe
+httpx
+python-whois

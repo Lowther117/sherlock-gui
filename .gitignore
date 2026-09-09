@@ -1,0 +1,15 @@
+.venv-win/
+.venv-mac/
+.venv-build/
+.venv-build-mac/
+build/
+dist/
+*.spec
+build-win-log.txt
+build-mac-log.txt
+sherlock-gui-selftest.txt
+sherlock-gui-crash.log
+sherlock_gui.json
+__pycache__/
+*.pyc
+.DS_Store
