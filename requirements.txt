@@ -1,0 +1,7 @@
+sherlock-project
+requests
+requests-futures
+certifi
+phonenumbers
+dnspython
+pillow
