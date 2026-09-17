@@ -106,16 +106,17 @@ async def _holehe_run(email, timeout, on_result, stop_flag):
             nonlocal seen
             if stop_flag.is_set():
                 return
-            before = len(out)
+            mine = []   # own list: the checks run concurrently, so slicing the shared one re-reports other sites
             try:
                 if hasattr(core, "launch_module"):
-                    await core.launch_module(fn, email, client, out)
+                    await core.launch_module(fn, email, client, mine)
                 else:
-                    await fn(email, client, out)
+                    await fn(email, client, mine)
             except Exception as e:
-                out.append({"name": fn.__name__, "domain": "", "rateLimit": False, "exists": False,
-                            "error": repr(e)})
-            for r in out[before:]:
+                mine.append({"name": fn.__name__, "domain": "", "rateLimit": False, "exists": False,
+                             "error": repr(e)})
+            out.extend(mine)
+            for r in mine:
                 on_result(r)
         await asyncio.gather(*[one(f) for f in funcs])
     return out
@@ -188,7 +189,7 @@ def normalise_holehe(r):
     return {
         "site": r.get("name") or "?", "domain": r.get("domain") or "", "state": state,
         "recovery": r.get("emailrecovery") or "", "phone": r.get("phoneNumber") or "",
-        "other": others or r.get("error") or "", "method": r.get("method") or "",
+        "other": str(others or r.get("error") or ""), "method": r.get("method") or "",
         "flaky": bool(r.get("frequent_rate_limit")),
     }
 
@@ -247,7 +248,8 @@ def mx_check(email):
                 row["other"] = v + " - " + row["other"]
                 break
     else:
-        row["state"] = "No MX record"
+        # a resolver timeout / SERVFAIL is not "no mail servers" - only NXDOMAIN or an empty answer is
+        row["state"] = "No MX record" if (not recs or "NXDOMAIN" in recs[0]) else "Unknown"
         row["other"] = recs[0] if recs else "domain has no mail servers"
     return row
 
@@ -300,7 +302,7 @@ def phone_lookup(raw, default_region="GB"):
         pass
     e164 = phonenumbers.format_number(n, PhoneNumberFormat.E164)
     out.append(("Search links", "https://www.google.com/search?q=%%22%s%%22   |   https://www.google.com/search?q=%%22%s%%22"
-                % (e164, phonenumbers.format_number(n, PhoneNumberFormat.NATIONAL).replace(" ", "+"))))
+                % (e164.replace("+", "%2B"), phonenumbers.format_number(n, PhoneNumberFormat.NATIONAL).replace(" ", "+"))))
     out.append(("WhatsApp", "https://wa.me/%s" % e164.lstrip("+")))
     out.append(("Telegram", "https://t.me/%s" % e164))
     return out

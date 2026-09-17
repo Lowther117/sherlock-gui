@@ -73,7 +73,10 @@ def find_avatar_candidates(html, page_url=None, username=None):
         if not u or _junk(u):
             return
         if page_url:
-            u = urllib.parse.urljoin(page_url, u)
+            try:
+                u = urllib.parse.urljoin(page_url, u)
+            except ValueError:      # e.g. "http://[bad" - one broken URL must not lose the others
+                return
         if not u.lower().startswith(("http://", "https://")):
             return
         if username and username.lower() in u.lower():

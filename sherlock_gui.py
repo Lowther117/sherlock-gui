@@ -193,6 +193,13 @@ def save_settings(s):
         pass
 
 
+def _csv_safe(v):
+    """Remote text (profile names, hints) must not open as a formula in Excel / Numbers."""
+    if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + v
+    return v
+
+
 COLUMNS = [
     ("username", "Username", 100), ("site", "Site", 150), ("category", "Category", 100),
     ("status", "Status", 75), ("confidence", "Confidence", 80), ("verify", "Verified", 75),
@@ -1132,7 +1139,7 @@ def main():
                 row["status"] = "Unknown"
             row["engines"] = " + ".join(sorted(row["eng"]))
             info = self.sherlock_sites.get(row["site"]) or {}
-            if not info:
+            if not info and "Sherlock" in row["eng"]:
                 for (eng, u, s), k in self.site_key.items():
                     if k == row["key"] and eng == "Sherlock":
                         info = self.sherlock_sites.get(s) or {}
@@ -1666,16 +1673,20 @@ def main():
             if not path:
                 return
             keys = [c[0] for c in COLUMNS]
+
+            def cell(r, k):
+                # "avatar" holds the fetched picture (raw bytes included); export the Picture column text
+                return r.get("avatar_col") if k == "avatar" else r.get(k)
             try:
                 if fmt == "csv":
                     with open(path, "w", newline="", encoding="utf-8") as f:
                         w = csv.writer(f)
                         w.writerow([c[1] for c in COLUMNS])
                         for r in rows:
-                            w.writerow(["" if r.get(k) is None else r.get(k) for k in keys])
+                            w.writerow([_csv_safe("" if cell(r, k) is None else cell(r, k)) for k in keys])
                 elif fmt == "json":
                     with open(path, "w", encoding="utf-8") as f:
-                        json.dump([{k: r.get(k) for k in keys + ["eng", "ids"]} for r in rows], f, indent=2, default=str)
+                        json.dump([{k: cell(r, k) for k in keys + ["eng", "ids"]} for r in rows], f, indent=2, default=str)
                 else:
                     with open(path, "w", encoding="utf-8") as f:
                         for r in rows:
@@ -1744,7 +1755,7 @@ def main():
                     w = csv.writer(f)
                     w.writerow([c[1] for c in EMAIL_COLUMNS])
                     for r in self.email_rows:
-                        w.writerow([r.get(k, "") for k, _, _ in EMAIL_COLUMNS])
+                        w.writerow([_csv_safe(r.get(k, "")) for k, _, _ in EMAIL_COLUMNS])
                 self.logmsg("Exported %d email rows to %s" % (len(self.email_rows), path))
             except Exception as e:
                 messagebox.showerror(APP_NAME, "Export failed: %s" % e)
