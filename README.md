@@ -172,3 +172,7 @@ and shown in a dialog.
 - Descriptions are hand-written for the ~420 best-known sites; anything
   newer gets a category from keyword heuristics and its domain as the
   description.
+
+## Licence
+
+MIT No Attribution (MIT-0): do whatever you like with it - no credit needed, no warranty. See `LICENSE`.
