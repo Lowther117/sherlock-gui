@@ -136,7 +136,7 @@ PHONE
 Type a number and press Look up. Everything happens offline using Google's libphonenumber data: validity,
 possible vs valid, country/region, line type (mobile, fixed line, VoIP, toll-free, premium...), the carrier
 the number block was originally issued to (numbers that have since been ported keep the original carrier),
-time zones and the E.164, international, national and RFC3966 formats, plus quick links to search the
+time zones and the E.164, international and national formats, plus quick links to search the
 number on the web. Default region is only used when the number is typed without a + country code (GB for
 07..., for example). This tab cannot tell you who currently owns a number.
 

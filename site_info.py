@@ -441,7 +441,7 @@ SITE_INFO = {
 
 # Sites where Sherlock is known to report "Claimed" for usernames that do not
 # exist (bot walls, redirects to a generic page, soft-404s, rate limiting).
-# Editable in the app under Settings > False-positive sites.
+# Editable in the app under Settings > False-positive site list...
 DEFAULT_FLAKY_SITES = [
     "Xbox Gamertag", "Kik", "Wattpad", "Fiverr", "Spotify", "Facebook",
     "Instagram", "TikTok", "Chaturbate", "Kongregate", "Naver", "Vero",
