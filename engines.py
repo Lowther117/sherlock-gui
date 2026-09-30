@@ -87,8 +87,18 @@ def _load_sherlock():
                 SHERLOCK_VERSION = version("sherlock-project")
             except Exception:
                 SHERLOCK_VERSION = "unknown"
-    except Exception as e:
-        SHERLOCK_ERROR = repr(e)
+    except BaseException as e:
+        # BaseException, not Exception: sherlock.py calls sys.exit(1) when its
+        # own package fails to import, and a SystemExit slipping through here
+        # would close the app at start-up with nothing on screen.
+        if isinstance(e, KeyboardInterrupt):
+            raise
+        SHERLOCK_FUNC = None
+        if isinstance(e, SystemExit):
+            SHERLOCK_ERROR = ("sherlock_project gave up during its own import (SystemExit %r) - "
+                              "the package is incomplete in this build" % (e.code,))
+        else:
+            SHERLOCK_ERROR = repr(e)
 
 
 _load_sherlock()
@@ -106,16 +116,16 @@ def _resource_candidates(rel, here):
 
 def load_sherlock_sites(here):
     """Return ({site_name: info_dict}, source_label) for Sherlock's data.json."""
+    data_path = None
+    try:
+        import sherlock_project
+        p = os.path.join(os.path.dirname(sherlock_project.__file__), "resources", "data.json")
+        if os.path.isfile(p):
+            data_path = p
+    except BaseException:
+        pass
     try:
         from sherlock_project.sites import SitesInformation
-        data_path = None
-        try:
-            import sherlock_project
-            p = os.path.join(os.path.dirname(sherlock_project.__file__), "resources", "data.json")
-            if os.path.isfile(p):
-                data_path = p
-        except Exception:
-            pass
         sites = SitesInformation(data_path) if data_path else SitesInformation()
         data = {}
         for s in sites:
@@ -126,7 +136,11 @@ def load_sherlock_sites(here):
             return data, "sherlock_project %s" % SHERLOCK_VERSION
     except Exception:
         pass
-    for p in _resource_candidates(os.path.join("sherlock_project", "resources", "data.json"), here) + \
+    # SitesInformation can fail for reasons that have nothing to do with the
+    # list itself (newer releases fetch an exclusions file first), so read the
+    # installed package's own data.json directly before looking anywhere else.
+    for p in ([data_path] if data_path else []) + \
+            _resource_candidates(os.path.join("sherlock_project", "resources", "data.json"), here) + \
             _resource_candidates("data.json", here):
         if os.path.isfile(p):
             with open(p, "r", encoding="utf-8") as f:

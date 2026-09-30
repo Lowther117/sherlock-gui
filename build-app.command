@@ -58,7 +58,7 @@ pick_python() {
     return 1
 }
 
-echo "[1/6] Finding a bundle-able Python..."
+echo "[1/7] Finding a bundle-able Python..."
 PY="$(pick_python)"
 if [ -z "$PY" ]; then
     echo "      none found - installing python + python-tk via Homebrew..."
@@ -72,15 +72,31 @@ if [ -z "$PY" ]; then
 fi
 echo "      using $PY ($("$PY" -c 'import sys,tkinter;print(sys.version.split()[0],"Tk",tkinter.TkVersion)'))"
 
-echo "[2/6] Creating build environment..."
+echo "[2/7] Creating build environment..."
 if [ -x "$VENV/bin/python" ] && ! "$VENV/bin/python" -c 'import sys' >/dev/null 2>&1; then rm -rf "$VENV"; fi
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV" || exit 1
 VPY="$VENV/bin/python"
 "$VPY" -m pip install --upgrade pip --only-binary :all: >/dev/null 2>&1
 
-echo "[3/6] Installing dependencies..."
+echo "[3/7] Installing Sherlock..."
 # stem (Tor support, pulled in by sherlock-project) is pure Python but ships no wheel - install it first without the wheel-only rule
 "$VPY" -m pip install "stem>=1.8" || { echo "PROBLEMS FOUND: could not install stem (see $LOG)"; read -r -p "Press Enter to close." < /dev/tty; exit 1; }
+# Sherlock itself, newest release every build (so the site list is current):
+# wheels first, then source packages allowed, then straight from its GitHub repo.
+"$VPY" -m pip install --upgrade --only-binary :all: sherlock-project || {
+    echo "      wheel-only install failed - allowing source packages..."
+    "$VPY" -m pip install --upgrade sherlock-project || {
+        echo "      PyPI install failed - installing Sherlock from GitHub..."
+        "$VPY" -m pip install --upgrade "https://github.com/sherlock-project/sherlock/archive/refs/heads/master.zip" || true
+    }
+}
+# Proof, not hope: the build stops here unless the engine really imports.
+"$VPY" check_sherlock.py || {
+    echo
+    echo "PROBLEMS FOUND: Sherlock could not be installed into the build environment, so no app was built (see $LOG)"
+    read -r -p "Press Enter to close." < /dev/tty; exit 1; }
+
+echo "[4/7] Installing the other dependencies..."
 "$VPY" -m pip install --only-binary :all: -r requirements.txt pyinstaller || {
     echo "PROBLEMS FOUND: dependency install failed (see $LOG)"; read -r -p "Press Enter to close." < /dev/tty; exit 1; }
 echo "      optional extras (Maigret, holehe, whois) - wheels first, then allowing source packages..."
@@ -94,10 +110,19 @@ for m in maigret socid_extractor cloudscraper holehe httpx trio whois PIL; do
 done
 echo "      bundling extras: ${EXTRA[*]}"
 
-echo "[4/6] Building dist/$APP.app (a few minutes)..."
+# The optional extras pull in their own dependencies - make sure none of them broke Sherlock.
+"$VPY" check_sherlock.py >/dev/null || {
+    "$VPY" check_sherlock.py
+    echo "PROBLEMS FOUND: installing the optional extras broke Sherlock (see $LOG)"
+    read -r -p "Press Enter to close." < /dev/tty; exit 1; }
+
+echo "[5/7] Building dist/$APP.app (a few minutes)..."
 rm -rf "dist/$APP.app" "dist/$APP"
 "$VPY" -m PyInstaller --noconfirm --clean --windowed --name "$APP" \
     --collect-all sherlock_project \
+    --copy-metadata sherlock-project \
+    --hidden-import sherlock_project.sherlock --hidden-import sherlock_project.sites --hidden-import sherlock_project.notify --hidden-import sherlock_project.result \
+    --hidden-import tomli \
     --collect-all certifi \
     --collect-all phonenumbers \
     --collect-submodules dns \
@@ -111,11 +136,11 @@ rm -rf "dist/$APP.app" "dist/$APP"
     sherlock_gui_app.py || {
     echo "PROBLEMS FOUND: PyInstaller failed (see $LOG)"; read -r -p "Press Enter to close." < /dev/tty; exit 1; }
 
-echo "[5/6] Clearing quarantine + ad-hoc signing (needed on Apple silicon)..."
+echo "[6/7] Clearing quarantine + ad-hoc signing (needed on Apple silicon)..."
 xattr -cr "dist/$APP.app" 2>/dev/null
 codesign --force --deep --sign - "dist/$APP.app" 2>&1 | grep -v "replacing existing signature" || true
 
-echo "[6/6] Self-test..."
+echo "[7/7] Self-test (fails if Sherlock is not inside the app)..."
 rm -f "dist/sherlock-gui-selftest.txt"
 "dist/$APP.app/Contents/MacOS/$APP" selftest
 echo "selftest exit code: $?"

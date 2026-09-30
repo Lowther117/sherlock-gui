@@ -47,6 +47,7 @@ rm -rf "$VENV"
 "$PY" -m venv "$VENV" || exit 1
 "$VENV/bin/python" -m pip install --upgrade pip --only-binary :all: >/dev/null 2>&1
 "$VENV/bin/python" -m pip install "stem>=1.8" >/dev/null 2>&1
-"$VENV/bin/python" -m pip install --only-binary :all: -r requirements.txt || { read -r -p "Install failed. Press Enter." < /dev/tty; exit 1; }
+"$VENV/bin/python" -m pip install --only-binary :all: -r requirements.txt || "$VENV/bin/python" -m pip install -r requirements.txt || { read -r -p "Install failed. Press Enter." < /dev/tty; exit 1; }
+"$VENV/bin/python" check_sherlock.py || { read -r -p "Sherlock did not install - fix the error above and run this again. Press Enter." < /dev/tty; exit 1; }
 "$VENV/bin/python" -m pip install --only-binary :all: -r requirements-optional.txt || "$VENV/bin/python" -m pip install -r requirements-optional.txt || true
 exec "$VENV/bin/python" "$PWD/sherlock_gui.py"

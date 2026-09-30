@@ -18,7 +18,12 @@ if not defined PY (
 if not exist "%VENV%\Scripts\python.exe" "%PY%" -m venv "%VENV%" || (pause & exit /b 1)
 "%VENV%\Scripts\python.exe" -m pip install --upgrade pip --only-binary :all: >nul 2>&1
 "%VENV%\Scripts\python.exe" -m pip install "stem>=1.8" || (pause & exit /b 1)
-"%VENV%\Scripts\python.exe" -m pip install --only-binary :all: -r requirements.txt || (pause & exit /b 1)
+"%VENV%\Scripts\python.exe" -m pip install --only-binary :all: -r requirements.txt || "%VENV%\Scripts\python.exe" -m pip install -r requirements.txt || (pause & exit /b 1)
+"%VENV%\Scripts\python.exe" check_sherlock.py || (
+    echo Sherlock did not install - the app would only have its built-in checker. Fix the error above and run this again.
+    pause
+    exit /b 1
+)
 "%VENV%\Scripts\python.exe" -m pip install --only-binary :all: -r requirements-optional.txt || "%VENV%\Scripts\python.exe" -m pip install -r requirements-optional.txt
 
 :run

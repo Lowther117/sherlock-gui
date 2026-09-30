@@ -65,6 +65,17 @@ still succeeds and the app says which tab or engine is missing. Each build write
 log (`build-win-log.txt` / `build-mac-log.txt`) and runs a self-test at the end;
 "PROBLEMS FOUND" means look at the log.
 
+**Sherlock is required, and the build proves it is there.** Installing it is its
+own step: the newest `sherlock-project` release is installed (wheels first, then
+source packages, then straight from Sherlock's GitHub repo if PyPI fails), and
+`check_sherlock.py` then imports the real engine and counts its site list. If
+that fails the build stops before PyInstaller runs - it prints
+`SHERLOCK MISSING - <reason>` instead of building an app that would quietly fall
+back to the built-in checker. A good build prints
+`SHERLOCK OK - sherlock-project <version>, <n> sites` in step 3, and the final
+self-test of the finished app must report `SHERLOCK ENGINE: OK` or the build is
+marked as failed.
+
 The `.command` files are committed with the executable bit set, so a `git clone`
 or GitHub ZIP download double-clicks straight away - no `chmod`. If a copy has
 lost that bit (e.g. zipped up on Windows and unzipped on the Mac) and Finder
@@ -134,7 +145,8 @@ limit Maigret to its top 500 / 1500 sites when you want a faster run (all
 one row with Engine = `Maigret + Sherlock`, and the two agreeing counts
 towards its confidence while disagreeing pulls it down. The app's own
 checker (same detection rules, browser User-Agent) is what Verify uses, and it
-stands in for Sherlock automatically if the package cannot be imported.
+stands in for Sherlock if the package cannot be imported - the log and the status bar say so
+loudly, and a build can no longer end up in that state (see above).
 
 ## Files
 
@@ -147,6 +159,7 @@ sherlock-gui/
   site_info.py               site descriptions, categories, default flaky list
   theme.py                   light/dark palettes and ttk styling (shared house theme)
   sherlock_gui_app.py        frozen entry point (selftest, crash log, -psn_ strip)
+  check_sherlock.py          build-time proof that the Sherlock engine is installed (run by all four scripts)
   requirements.txt           required: sherlock-project, requests, phonenumbers, dnspython, pillow...
   requirements-optional.txt  optional: maigret, holehe, httpx, python-whois
   run.bat / run.command      from-source launchers (self-setup venv per OS)
@@ -168,7 +181,8 @@ and shown in a dialog.
   the process exits within three seconds regardless.
 - The site list comes from the `data.json` inside the installed
   `sherlock-project` package, so updating the package (`pip install -U
-  sherlock-project` in the venv, then rebuild) updates the sites.
+  sherlock-project` in the venv, then rebuild) updates the sites. The build
+  scripts do that upgrade themselves on every build.
 - Descriptions are hand-written for the ~420 best-known sites; anything
   newer gets a category from keyword heuristics and its domain as the
   description.

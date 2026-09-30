@@ -11,7 +11,7 @@ echo  %APP% - Windows build
 echo  (full log: build-win-log.txt)
 echo.
 
-echo [1/5] Finding or installing Python...
+echo [1/6] Finding or installing Python...
 set "PY="
 for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0ensure_python.ps1"`) do set "PY=%%P"
 if not defined PY (
@@ -22,7 +22,7 @@ if not defined PY (
 echo       using %PY%
 echo Python: %PY% >> "%LOG%"
 
-echo [2/5] Creating build environment...
+echo [2/6] Creating build environment...
 if exist "%VENV%\Scripts\python.exe" (
     "%VENV%\Scripts\python.exe" -c "import sys; sys.exit(0)" >nul 2>&1 || rmdir /s /q "%VENV%"
 )
@@ -32,9 +32,33 @@ if not exist "%VENV%\Scripts\python.exe" (
 set "VPY=%VENV%\Scripts\python.exe"
 "%VPY%" -m pip install --upgrade pip --only-binary :all: >> "%LOG%" 2>&1
 
-echo [3/5] Installing dependencies...
+echo [3/6] Installing Sherlock...
 rem stem (Tor support, pulled in by sherlock-project) is pure Python but ships no wheel - install it first without the wheel-only rule
 "%VPY%" -m pip install "stem>=1.8" >> "%LOG%" 2>&1 || goto :fail
+rem Sherlock itself, newest release every build (so the site list is current):
+rem wheels first, then source packages allowed, then straight from its GitHub repo.
+"%VPY%" -m pip install --upgrade --only-binary :all: sherlock-project >> "%LOG%" 2>&1 || (
+    echo       wheel-only install failed - allowing source packages...
+    "%VPY%" -m pip install --upgrade sherlock-project >> "%LOG%" 2>&1 || (
+        echo       PyPI install failed - installing Sherlock from GitHub...
+        "%VPY%" -m pip install --upgrade "https://github.com/sherlock-project/sherlock/archive/refs/heads/master.zip" >> "%LOG%" 2>&1
+    )
+)
+rem Proof, not hope: the build stops here unless the engine really imports.
+if exist "sherlock-check.txt" del /q "sherlock-check.txt"
+"%VPY%" check_sherlock.py > "sherlock-check.txt" 2>&1
+set "SHRC=%ERRORLEVEL%"
+type "sherlock-check.txt"
+type "sherlock-check.txt" >> "%LOG%"
+del /q "sherlock-check.txt" >nul 2>&1
+if not "%SHRC%"=="0" (
+    echo.
+    echo Sherlock could not be installed into the build environment, so no app was built.
+    echo Sherlock could not be installed into the build environment >> "%LOG%"
+    goto :fail
+)
+
+echo [4/6] Installing the other dependencies...
 "%VPY%" -m pip install --only-binary :all: -r requirements.txt pyinstaller >> "%LOG%" 2>&1 || goto :fail
 echo       optional extras (Maigret, holehe, whois) - wheels first, then allowing source packages...
 "%VPY%" -m pip install --only-binary :all: -r requirements-optional.txt >> "%LOG%" 2>&1 || (
@@ -50,10 +74,19 @@ for %%M in (maigret socid_extractor cloudscraper holehe httpx trio whois PIL) do
 echo       bundling extras:!EXTRA! >> "%LOG%"
 echo       bundling extras:!EXTRA!
 
-echo [4/5] Building dist\%APP%\%APP%.exe (this takes a few minutes)...
+rem The optional extras pull in their own dependencies - make sure none of them broke Sherlock.
+"%VPY%" check_sherlock.py >> "%LOG%" 2>&1 || (
+    echo Installing the optional extras broke Sherlock - see build-win-log.txt
+    goto :fail
+)
+
+echo [5/6] Building dist\%APP%\%APP%.exe (this takes a few minutes)...
 if exist "dist\%APP%" rmdir /s /q "dist\%APP%"
 "%VPY%" -m PyInstaller --noconfirm --clean --onedir --windowed --name "%APP%" ^
   --collect-all sherlock_project ^
+  --copy-metadata sherlock-project ^
+  --hidden-import sherlock_project.sherlock --hidden-import sherlock_project.sites --hidden-import sherlock_project.notify --hidden-import sherlock_project.result ^
+  --hidden-import tomli ^
   --collect-all certifi ^
   --collect-all phonenumbers ^
   --collect-submodules dns ^
@@ -65,7 +98,7 @@ if exist "dist\%APP%" rmdir /s /q "dist\%APP%"
   !EXTRA! ^
   sherlock_gui_app.py >> "%LOG%" 2>&1 || goto :fail
 
-echo [5/5] Self-test...
+echo [6/6] Self-test (fails if Sherlock is not inside the app)...
 if exist "dist\%APP%\sherlock-gui-selftest.txt" del /q "dist\%APP%\sherlock-gui-selftest.txt"
 start /wait "" "dist\%APP%\%APP%.exe" selftest
 echo selftest exit code: %ERRORLEVEL% >> "%LOG%"

@@ -34,7 +34,7 @@ import tools
 
 APP_NAME = "Sherlock GUI"
 SETTINGS_FILE = "sherlock_gui.json"
-VERSION = "2.1"
+VERSION = "2.2"
 
 
 def _app_dir():
@@ -958,7 +958,11 @@ def main():
                 self.sherlock_sites, src = engines.load_sherlock_sites(HERE)
                 self.logmsg("Sherlock: %d sites (%s)." % (len(self.sherlock_sites), src))
                 if engines.SHERLOCK_FUNC is None:
-                    self.logmsg("Sherlock engine not importable (%s) - built-in checker will stand in." % engines.SHERLOCK_ERROR)
+                    self.logmsg("WARNING: the Sherlock engine is NOT in this build (%s) - the built-in "
+                                "checker is standing in. Rebuild with build-exe.bat / build-app.command; "
+                                "the build now stops if Sherlock cannot be installed." % engines.SHERLOCK_ERROR)
+                else:
+                    self.logmsg("Sherlock engine: sherlock_project %s loaded." % engines.SHERLOCK_VERSION)
             except Exception as e:
                 self.sherlock_sites = {}
                 self.logmsg(str(e))
@@ -970,7 +974,10 @@ def main():
                     self.logmsg("Maigret is installed but its database failed to load: %r" % e)
             else:
                 self.logmsg("Maigret not installed (%s) - searching with Sherlock only." % (engines.MAIGRET_ERROR or "?"))
-            self.status_var.set("Ready - every site is searched (NSFW included).")
+            if engines.SHERLOCK_FUNC is None:
+                self.status_var.set("Sherlock engine missing from this build - built-in checker in use (see the log).")
+            else:
+                self.status_var.set("Ready - every site is searched (NSFW included).")
 
         def _usernames_raw(self):
             names = [n for n in re.split(r"[\s,;]+", self.user_var.get().strip()) if n]
@@ -1869,8 +1876,15 @@ def selftest():
     except Exception as e:
         ok = False
         lines.append("PROBLEM: requests missing: %r" % e)
-    lines.append("sherlock_project: %s%s" % (engines.SHERLOCK_VERSION,
-                 "" if engines.SHERLOCK_FUNC else " (engine NOT importable: %s)" % engines.SHERLOCK_ERROR))
+    # The real Sherlock engine has to be inside the app. Without it the app
+    # still opens and the built-in checker stands in, which is exactly how a
+    # build with Sherlock left out used to pass this test - so it is a failure.
+    if engines.SHERLOCK_FUNC:
+        lines.append("SHERLOCK ENGINE: OK - sherlock_project %s" % engines.SHERLOCK_VERSION)
+    else:
+        ok = False
+        lines.append("PROBLEM: SHERLOCK ENGINE MISSING - sherlock_project is not in this build (%s)"
+                     % (engines.SHERLOCK_ERROR or "not installed"))
     try:
         data, src = engines.load_sherlock_sites(HERE)
         lines.append("sherlock sites: %d (%s)" % (len(data), src))
