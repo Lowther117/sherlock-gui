@@ -259,10 +259,11 @@ def main():
             self.mono_family = theme.mono_family(root)
             self.font_size = 13 if sys.platform == "darwin" else 10
 
-            self.dark = bool(self.S.get("dark", True))
-            self.dark_var = tk.BooleanVar(value=self.dark)
+            self.theme_name = theme.from_settings(self.S)   # phosphor purple by default
+            self.dark = theme.is_dark(self.theme_name)
+            self.theme_var = tk.StringVar(value=self.theme_name)
             self.style = ttk.Style(root)
-            self.P = theme.apply(root, self.dark)
+            self.P = theme.apply(root, self.theme_name)
             self.text_widgets = []
             self.edit_widgets = []      # editable tk.Text widgets (field colours)
             self.toplevels = []         # open dialogs, recoloured on toggle
@@ -277,11 +278,14 @@ def main():
 
         # ------------------------------------------------------------------ theme
         def toggle_dark(self, *_):
-            self.dark_var.set(not self.dark)
+            """Ctrl+D / Cmd+D: the next theme, Phosphor -> Dark -> Light."""
+            self.theme_var.set(theme.next_theme(self.theme_name))
             self.set_dark()
 
         def set_dark(self):
-            self.dark = bool(self.dark_var.get())
+            self.theme_name = theme.resolve(self.theme_var.get())
+            self.dark = theme.is_dark(self.theme_name)
+            self.S["theme"] = self.theme_name
             self.S["dark"] = self.dark
             save_settings(self.S)
             self._apply_theme()
@@ -289,7 +293,7 @@ def main():
         def _apply_theme(self):
             # House palette + ttk styles from theme.py, then the styles and classic
             # tk widgets this app has on top of it.
-            P = self.P = theme.apply(self.root, self.dark)
+            P = self.P = theme.apply(self.root, self.theme_name)
             s = self.style
             base_font = (self.font_family, self.font_size)
             s.configure(".", font=base_font)
@@ -398,8 +402,12 @@ def main():
                                command=self.toggle_tab_intros)
             self.menubar.add_cascade(label="Settings", menu=sm)
             vm = tk.Menu(self.menubar, tearoff=0)
-            vm.add_checkbutton(label="Dark mode", variable=self.dark_var, command=self.set_dark,
-                               accelerator="Cmd+D" if sys.platform == "darwin" else "Ctrl+D")
+            for key in theme.ORDER:
+                vm.add_radiobutton(label=theme.label(key), value=key, variable=self.theme_var,
+                                   command=self.set_dark)
+            vm.add_separator()
+            vm.add_command(label="Next theme", command=self.toggle_dark,
+                           accelerator="Cmd+D" if sys.platform == "darwin" else "Ctrl+D")
             self.menubar.add_cascade(label="View", menu=vm)
             self.root.bind("<Control-d>", self.toggle_dark)
             self.root.bind("<Command-d>", self.toggle_dark)
@@ -1837,6 +1845,7 @@ def main():
                 S["phone_region"] = self.region_var.get()
                 S["email_only_registered"] = bool(self.email_only_var.get())
                 S["domain_subdomains"] = bool(self.subdomains_var.get())
+                S["theme"] = self.theme_name
                 S["dark"] = bool(self.dark)
                 try:
                     S["last_tab"] = int(self.nb.index(self.nb.select()))

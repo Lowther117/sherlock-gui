@@ -26,8 +26,8 @@ merges their results into one table and adds what the command lines lack:
   photo on two sites is the strongest sign the accounts are one person);
   right-click any row to send its picture to a reverse image search
 - several usernames at once, proxy support, CSV / TXT export buttons (JSON
-  via File > Export), dark mode by default with a light mode (View > Dark mode,
-  Ctrl+D / Cmd+D). Every site is always searched - there is no NSFW toggle.
+  via File > Export), the Phosphor purple theme by default (the same look as Winnow) with Dark
+  and Light alongside (View menu; Ctrl+D / Cmd+D cycles them). Every site is always searched - there is no NSFW toggle.
 
 Four more tabs:
 
@@ -157,7 +157,7 @@ sherlock-gui/
   tools.py                   holehe email checker, phone lookup, domain lookup
   images.py                  profile-picture finder, dHash fingerprints, reverse-search links
   site_info.py               site descriptions, categories, default flaky list
-  theme.py                   light/dark palettes and ttk styling (shared house theme)
+  theme.py                   phosphor/dark/light palettes and ttk styling (shared house theme)
   sherlock_gui_app.py        frozen entry point (selftest, crash log, -psn_ strip)
   check_sherlock.py          build-time proof that the Sherlock engine is installed (run by all four scripts)
   requirements.txt           required: sherlock-project, requests, phonenumbers, dnspython, pillow...
