@@ -29,6 +29,27 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 EMAIL_RX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
+def _proxies(proxy):
+    """requests' proxies= mapping for the proxy set on the Username tab (or None)."""
+    return {"http": proxy, "https": proxy} if proxy else None
+
+
+def _httpx_proxy_kwargs(httpx, proxy):
+    """httpx renamed proxies= (one URL or a mapping) to proxy= in 0.26 and removed
+    the old name in 0.28; ask the installed version which one it takes."""
+    if not proxy:
+        return {}
+    try:
+        params = inspect.signature(httpx.AsyncClient.__init__).parameters
+    except Exception:
+        params = {}
+    if "proxy" in params:
+        return {"proxy": proxy}
+    if "proxies" in params:
+        return {"proxies": proxy}
+    return {"proxy": proxy}
+
+
 # ----------------------------------------------------------------------------
 # Where user output goes (exports etc.)
 # ----------------------------------------------------------------------------
@@ -95,13 +116,14 @@ def _holehe_modules():
         return funcs
 
 
-async def _holehe_run(email, timeout, on_result, stop_flag):
+async def _holehe_run(email, timeout, on_result, stop_flag, proxy=None):
     import httpx
     from holehe import core
     funcs = _holehe_modules()
     out = []
     seen = 0
-    async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": UA}) as client:
+    async with httpx.AsyncClient(timeout=timeout, headers={"User-Agent": UA},
+                                 **_httpx_proxy_kwargs(httpx, proxy)) as client:
         async def one(fn):
             nonlocal seen
             if stop_flag.is_set():
@@ -125,9 +147,10 @@ async def _holehe_run(email, timeout, on_result, stop_flag):
 class EmailChecker(threading.Thread):
     """Runs holehe plus a couple of cheap extra checks; results -> q."""
 
-    def __init__(self, email, q, timeout=10):
+    def __init__(self, email, q, timeout=10, proxy=None):
         super().__init__(daemon=True)
         self.email, self.q, self.timeout = email.strip(), q, timeout
+        self.proxy = proxy or None
         self.stop_flag = threading.Event()
         self._loop = None
 
@@ -144,7 +167,7 @@ class EmailChecker(threading.Thread):
         try:
             self.q.put(("email_start", self.email))
             # cheap extras first
-            self.q.put(("email_row", gravatar_check(self.email)))
+            self.q.put(("email_row", gravatar_check(self.email, timeout=self.timeout, proxy=self.proxy)))
             self.q.put(("email_row", mx_check(self.email)))
             ok, ver = holehe_status()
             if not ok:
@@ -157,7 +180,7 @@ class EmailChecker(threading.Thread):
                 try:
                     loop.run_until_complete(_holehe_run(
                         self.email, self.timeout, lambda r: self.q.put(("email_row", normalise_holehe(r))),
-                        self.stop_flag))
+                        self.stop_flag, self.proxy))
                 except (asyncio.CancelledError, RuntimeError):
                     if not self.stop_flag.is_set():
                         raise
@@ -194,18 +217,19 @@ def normalise_holehe(r):
     }
 
 
-def gravatar_check(email):
+def gravatar_check(email, timeout=10, proxy=None):
     h = hashlib.md5(email.strip().lower().encode("utf-8")).hexdigest()
     url = "https://www.gravatar.com/avatar/%s?d=404" % h
     row = {"site": "Gravatar", "domain": "gravatar.com", "state": "Unknown", "recovery": "",
            "phone": "", "other": "", "method": "avatar hash", "flaky": False}
     try:
-        r = requests.get(url, timeout=10, headers={"User-Agent": UA})
+        r = requests.get(url, timeout=timeout, headers={"User-Agent": UA}, proxies=_proxies(proxy))
         if r.status_code == 200:
             row["state"] = "Registered"
             row["other"] = "avatar: " + url
             try:
-                p = requests.get("https://www.gravatar.com/%s.json" % h, timeout=10, headers={"User-Agent": UA})
+                p = requests.get("https://www.gravatar.com/%s.json" % h, timeout=timeout,
+                                 headers={"User-Agent": UA}, proxies=_proxies(proxy))
                 if p.status_code == 200:
                     e = (p.json().get("entry") or [{}])[0]
                     bits = [e.get("displayName"), e.get("preferredUsername"), e.get("aboutMe"),
@@ -247,10 +271,22 @@ def mx_check(email):
             if k in low:
                 row["other"] = v + " - " + row["other"]
                 break
+    elif not recs:
+        # No MX record is not "no mail": RFC 5321 says mail then goes to the
+        # domain's own address (the "implicit MX"), so look for an A/AAAA record.
+        a = dns_lookup(dom, ["A", "AAAA"])
+        addrs = [v for v in (a.get("A") or []) + (a.get("AAAA") or []) if not str(v).startswith("error")]
+        if addrs:
+            row["state"] = "Accepts mail"
+            row["other"] = ("no MX record - mail falls back to the domain's A record "
+                            "(implicit MX): " + ", ".join(addrs[:4]))
+        else:
+            row["state"] = "No MX record"
+            row["other"] = "domain has no mail servers"
     else:
         # a resolver timeout / SERVFAIL is not "no mail servers" - only NXDOMAIN or an empty answer is
-        row["state"] = "No MX record" if (not recs or "NXDOMAIN" in recs[0]) else "Unknown"
-        row["other"] = recs[0] if recs else "domain has no mail servers"
+        row["state"] = "No MX record" if "NXDOMAIN" in recs[0] else "Unknown"
+        row["other"] = recs[0]
     return row
 
 
@@ -297,7 +333,8 @@ def phone_lookup(raw, default_region="GB"):
         ("Time zones", ", ".join(timezone.time_zones_for_number(n)) or "unknown"),
     ]
     try:
-        out.append(("Dialling from GB", phonenumbers.format_out_of_country_calling_number(n, "GB")))
+        frm = (default_region or "GB").upper()
+        out.append(("Dialling from %s" % frm, phonenumbers.format_out_of_country_calling_number(n, frm)))
     except Exception:
         pass
     e164 = phonenumbers.format_number(n, PhoneNumberFormat.E164)
@@ -321,6 +358,18 @@ def clean_domain(s):
     s = s.split("/")[0].split("?")[0].split("@")[-1]
     if s.startswith("www."):
         s = s[4:]
+    s = s.rstrip(".")
+    if s and not s.isascii():
+        # An internationalised name (bücher.de, пример.рф) is looked up in its
+        # ASCII "xn--" form - that is what DNS, RDAP and crt.sh know it by.
+        try:
+            import idna
+            s = idna.encode(s, uts46=True).decode("ascii")
+        except Exception:
+            try:
+                s = s.encode("idna").decode("ascii")
+            except Exception:
+                pass
     return s
 
 
@@ -372,12 +421,12 @@ def _fmt_date(v):
     return str(v)[:10] if v else ""
 
 
-def rdap_lookup(domain):
+def rdap_lookup(domain, proxy=None):
     """Registration data via RDAP (no library needed). Returns dict or None."""
     try:
         r = requests.get("https://rdap.org/domain/%s" % domain, timeout=12,
                          headers={"User-Agent": UA, "Accept": "application/rdap+json, application/json"},
-                         allow_redirects=True)
+                         allow_redirects=True, proxies=_proxies(proxy))
         if r.status_code != 200:
             return {"error": "RDAP HTTP %d" % r.status_code}
         d = r.json()
@@ -448,10 +497,10 @@ def _whois_raw(server, query):
     return b"".join(chunks).decode("utf-8", "replace")
 
 
-def crtsh_subdomains(domain, limit=300):
+def crtsh_subdomains(domain, limit=300, proxy=None):
     try:
         r = requests.get("https://crt.sh/", params={"q": "%." + domain, "output": "json"}, timeout=25,
-                         headers={"User-Agent": UA})
+                         headers={"User-Agent": UA}, proxies=_proxies(proxy))
         if r.status_code != 200:
             return ["error: crt.sh HTTP %d" % r.status_code]
         data = r.json()
@@ -466,12 +515,12 @@ def crtsh_subdomains(domain, limit=300):
     return sorted(names)[:limit]
 
 
-def http_probe(domain):
+def http_probe(domain, proxy=None):
     out = []
     for scheme in ("https", "http"):
         try:
             r = requests.get("%s://%s/" % (scheme, domain), timeout=10, headers={"User-Agent": UA},
-                             allow_redirects=True)
+                             allow_redirects=True, proxies=_proxies(proxy))
             title = re.search(r"<title[^>]*>(.*?)</title>", r.text or "", re.I | re.S)
             out.append("%s://%s -> %d %s%s" % (
                 scheme, domain, r.status_code,
@@ -515,9 +564,10 @@ def _close_loop(loop):
 
 
 class DomainLookup(threading.Thread):
-    def __init__(self, domain, q, want_subdomains=True):
+    def __init__(self, domain, q, want_subdomains=True, proxy=None):
         super().__init__(daemon=True)
         self.domain, self.q, self.want_subdomains = clean_domain(domain), q, want_subdomains
+        self.proxy = proxy or None
         self.stop_flag = threading.Event()
 
     def stop(self):
@@ -530,7 +580,7 @@ class DomainLookup(threading.Thread):
                 self.q.put(("domain_section", "Error", ["'%s' does not look like a domain name." % d]))
                 return
             self.q.put(("domain_start", d))
-            reg = rdap_lookup(d)
+            reg = rdap_lookup(d, self.proxy)
             if not reg or reg.get("error") or not any(reg.get(k) for k in ("registrar", "created", "nameservers")):
                 w = whois_lookup(d)
                 if reg and reg.get("error"):
@@ -574,12 +624,12 @@ class DomainLookup(threading.Thread):
             if self.stop_flag.is_set():
                 return
 
-            self.q.put(("domain_section", "Web", http_probe(d)))
+            self.q.put(("domain_section", "Web", http_probe(d, self.proxy)))
             if self.stop_flag.is_set():
                 return
 
             if self.want_subdomains:
-                subs = crtsh_subdomains(d)
+                subs = crtsh_subdomains(d, proxy=self.proxy)
                 hdr = "Subdomains seen in TLS certificates (crt.sh) - %d" % (
                     0 if (subs and subs[0].startswith("error")) else len(subs))
                 self.q.put(("domain_section", hdr, subs or ["none found"]))

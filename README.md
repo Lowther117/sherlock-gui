@@ -23,9 +23,12 @@ merges their results into one table and adds what the command lines lack:
 - **profile pictures**: *Fetch pictures* downloads the picture from every
   claimed profile page, shows it in the preview pane, and marks rows that
   share the same picture (which also raises their confidence - the same
-  photo on two sites is the strongest sign the accounts are one person);
+  photo on two sites is the strongest sign the accounts are one person; a
+  match on the same site, or a picture three or more usernames share on one
+  site - its default avatar - does not count);
   right-click any row to send its picture to a reverse image search
-- several usernames at once, proxy support, CSV / TXT export buttons (JSON
+- several usernames at once, proxy support (every web request on every tab;
+  DNS and WHOIS go direct), CSV / TXT export buttons (JSON
   via File > Export), the Phosphor purple theme by default (the same look as Winnow) with Dark
   and Light alongside (View menu; Ctrl+D / Cmd+D cycles them). Every site is always searched - there is no NSFW toggle.
 
@@ -115,13 +118,15 @@ tab does** has the full guide.
 
 ### How confidence is scored
 
-Sherlock decides a profile exists from one of three rules per site: an HTTP
-status code, a redirect, or an "error message" string missing from the page.
+Sherlock decides a profile exists from one of three rules per site (some sites
+combine two): an HTTP status code, a redirect, or an "error message" string
+missing from the page.
 Bot walls, rate limits and soft-404 pages fool those rules. So:
 
 - **Low**: site is on the false-positive list; HTTP 403 / 429 / 5xx; a
-  Cloudflare/AWS/PerimeterX challenge page; a "not found / doesn't exist /
-  suspended" message in the page title or body; the engines disagree; the
+  Cloudflare/AWS/PerimeterX challenge page; a "page not found / user does not
+  exist / suspended" message in the page title or visible text (scripts and
+  styles are ignored); the engines disagree; the
   request was redirected to a homepage or login page; or a Verify
   re-request failed or was blocked.
 - **Medium**: the username does not appear anywhere in the returned page, the

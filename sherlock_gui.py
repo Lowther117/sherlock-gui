@@ -137,8 +137,8 @@ Type a number and press Look up. Everything happens offline using Google's libph
 possible vs valid, country/region, line type (mobile, fixed line, VoIP, toll-free, premium...), the carrier
 the number block was originally issued to (numbers that have since been ported keep the original carrier),
 time zones and the E.164, international and national formats, plus quick links to search the
-number on the web. Default region is only used when the number is typed without a + country code (GB for
-07..., for example). This tab cannot tell you who currently owns a number.
+number on the web. Default region is used when the number is typed without a + country code (GB for
+07..., for example), and for the "Dialling from" line. This tab cannot tell you who currently owns a number.
 
 DOMAIN
 Type a domain and press Look up. Registration: RDAP (the structured successor to WHOIS, with WHOIS as
@@ -159,13 +159,16 @@ their page yourself - the app opens the right page and puts the file path on the
 The app also fingerprints images (a perceptual "dHash", so re-encoded, resized or lightly cropped copies
 still match). "Fetch pictures" on the Username tab downloads the profile picture from every claimed page
 it has text for; rows sharing the same picture are marked in the Picture column and gain confidence,
-because the same photo on two sites is the best sign that two accounts belong to the same person. On the
+because the same photo on two sites is the best sign that two accounts belong to the same person. A match
+on the same site does not count, nor does a picture that three or more usernames share on one site (that
+is the site's default avatar). On the
 Image tab, "Compare with fetched pictures" lists the accounts whose picture matches the one loaded.
 
 ALL TABS
-Everything the app looks at is already public. Requests go out from your own connection (or the proxy set on
-the Username tab), and the log at the bottom shows what each run did. Copy buttons put the full text output
-on the clipboard.
+Everything the app looks at is already public. Web requests on every tab go out from your own connection, or
+through the proxy set on the Username tab when one is set. DNS lookups (Email MX check, Domain tab) and WHOIS
+always go direct - a web proxy cannot carry them. The log at the bottom shows what each run did. Copy buttons
+put the full text output on the clipboard.
 """
 
 
@@ -823,9 +826,12 @@ def main():
             self._set_text(self.image_out, [("Downloading %s ...\n" % src, "k")])
             self.image_preview.configure(image="", text="loading...")
 
+            # Tk variables belong to the main thread - read them here, not in work().
+            timeout, proxy = self._timeout(), self.proxy_var.get().strip() or None
+
             def work():
                 try:
-                    data, ct = images.fetch(src, timeout=self._timeout(), proxy=self.proxy_var.get().strip() or None)
+                    data, ct = images.fetch(src, timeout=timeout, proxy=proxy)
                     self.q.put(("image_loaded", src, data, ct, None))
                 except Exception as e:
                     self.q.put(("image_loaded", src, None, "", str(e)))
@@ -1168,7 +1174,15 @@ def main():
                 if mcat and cat == "Other":
                     cat = mcat
             row["category"], row["description"] = cat, desc
-            row["detection"] = info.get("errorType") if info else ("maigret" if "Maigret" in row["eng"] else "?")
+            row["detection"] = (engines.detection_label(info.get("errorType")) if info
+                                else ("maigret" if "Maigret" in row["eng"] else "?"))
+            # Page text is what the preview, Verify's soft-404 check and the
+            # picture finder use - only ever for claimed rows - so it is not kept
+            # for the thousands of Available/Unknown ones, and is capped.
+            if row["status"] != "Claimed":
+                row["text"] = ""
+            elif len(row.get("text") or "") > engines.TEXT_KEEP:
+                row["text"] = row["text"][:engines.TEXT_KEEP]
             engines.score(row, info, self.flaky)
 
         def _handle(self, msg):
@@ -1258,7 +1272,7 @@ def main():
                 row = self.row_key.get(key)
                 if row:
                     row["avatar"] = res
-                    self._recompute_avatar_matches()
+                    self._schedule_avatar_matches()
                     self._schedule_render()
                     sel = self._selected_avatar_row()
                     if sel is row:
@@ -1445,7 +1459,9 @@ def main():
                     chunks.append(("Picture: ", "k"))
                     chunks.append((av["error"] + "\n", "k"))
             if not pv and not r.get("text"):
-                chunks.append(("No page text captured for this result yet - run Verify to fetch the page.", "k"))
+                chunks.append(("No page text captured for this result yet - run Verify to fetch the page."
+                               if r["status"] == "Claimed" else
+                               "Page text is only kept for claimed results.", "k"))
             self._set_text(self.preview, chunks)
             self._show_avatar(r)
             if r["status"] == "Claimed" and r.get("text") and av is None:
@@ -1493,17 +1509,53 @@ def main():
                 r.pop("avatar", None)
             self._fetch_avatar_rows(rows)
 
+        def _schedule_avatar_matches(self):
+            """Pictures arrive one message each; regroup once per burst, not once per
+            picture (the comparison is all-pairs)."""
+            if getattr(self, "_avatar_match_pending", False):
+                return
+            self._avatar_match_pending = True
+
+            def run():
+                self._avatar_match_pending = False
+                self._recompute_avatar_matches()
+                self._schedule_render()
+                if self._selected_avatar_row() is not None:
+                    self._show_preview()
+            self.root.after(150, run)
+
         def _recompute_avatar_matches(self):
-            """Group rows whose profile pictures are the same image (dHash distance)."""
+            """Group rows whose profile pictures are the same image (dHash distance).
+
+            Two kinds of match are not evidence and are ignored: one on the same site
+            (two usernames there showing one picture), and any picture that 3 or more
+            different usernames share on one site - that is the site's default
+            avatar or placeholder, and it would otherwise "link" every account."""
             hashed = [r for r in self.rows if (r.get("avatar") or {}).get("hash")]
+            by_site = {}
+            for r in hashed:
+                by_site.setdefault(site_info.norm_name(r["site"]), []).append(r)
+            generic = []        # hashes that are a site's default picture
+            for rs in by_site.values():
+                if len({x["username"].lower() for x in rs}) < 3:
+                    continue
+                for r in rs:
+                    users = {o["username"].lower() for o in rs
+                             if images.same_picture(r["avatar"]["hash"], o["avatar"]["hash"])}
+                    if len(users) >= 3:
+                        generic.append(r["avatar"]["hash"])
+            if generic:
+                hashed = [r for r in hashed
+                          if not any(images.same_picture(r["avatar"]["hash"], g) for g in generic)]
             changed = set()
             for r in self.rows:
                 if r.pop("avatar_matches", None):
                     changed.add(r["key"])
             for r in hashed:
                 same = []
+                site = site_info.norm_name(r["site"])
                 for o in hashed:
-                    if o is r or o["key"] == r["key"]:
+                    if o is r or o["key"] == r["key"] or site_info.norm_name(o["site"]) == site:
                         continue
                     if images.same_picture(r["avatar"]["hash"], o["avatar"]["hash"]):
                         lbl = o["site"] if o["username"].lower() == r["username"].lower() else "%s (%s)" % (o["site"], o["username"])
@@ -1694,7 +1746,7 @@ def main():
                 return r.get("avatar_col") if k == "avatar" else r.get(k)
             try:
                 if fmt == "csv":
-                    with open(path, "w", newline="", encoding="utf-8") as f:
+                    with open(path, "w", newline="", encoding="utf-8-sig") as f:
                         w = csv.writer(f)
                         w.writerow([c[1] for c in COLUMNS])
                         for r in rows:
@@ -1719,7 +1771,8 @@ def main():
             if not tools.EMAIL_RX.match(email):
                 messagebox.showinfo(APP_NAME, "That does not look like an email address.")
                 return
-            self.email_thread = tools.EmailChecker(email, self.q, timeout=min(self._timeout(), 15))
+            self.email_thread = tools.EmailChecker(email, self.q, timeout=self._timeout(),
+                                                 proxy=self.proxy_var.get().strip() or None)
             self.btn_email.configure(state="disabled")
             self.btn_email_stop.configure(state="normal")
             self.eprog.start(12)
@@ -1766,7 +1819,7 @@ def main():
             if not path:
                 return
             try:
-                with open(path, "w", newline="", encoding="utf-8") as f:
+                with open(path, "w", newline="", encoding="utf-8-sig") as f:
                     w = csv.writer(f)
                     w.writerow([c[1] for c in EMAIL_COLUMNS])
                     for r in self.email_rows:
@@ -1792,7 +1845,8 @@ def main():
             d = tools.clean_domain(self.domain_var.get())
             if not d:
                 return
-            self.domain_thread = tools.DomainLookup(d, self.q, want_subdomains=self.subdomains_var.get())
+            self.domain_thread = tools.DomainLookup(d, self.q, want_subdomains=self.subdomains_var.get(),
+                                                    proxy=self.proxy_var.get().strip() or None)
             self.btn_domain.configure(state="disabled")
             self.dprog.start(12)
             self._set_text(self.domain_out, [("Looking up %s ...\n" % d, "k")])

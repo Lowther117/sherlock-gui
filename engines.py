@@ -299,14 +299,14 @@ WAF_HINTS = (
 SOFT404_HINTS = (
     "page not found", "user not found", "profile not found", "account not found",
     "this page doesn't exist", "this page does not exist", "page doesn't exist",
-    "doesn't exist", "does not exist", "no longer available", "has been suspended",
+    "no longer available", "has been suspended",
     "account suspended", "user has been banned", "this account has been deactivated",
-    "couldn't find this account", "could not find this account", "not be found",
+    "couldn't find this account", "could not find this account",
     "sorry, nobody on reddit goes by that name", "there is no such user", "no such user",
     "the page you requested was not found", "404 not found", "error 404", "http 404",
     "oops! that page can", "we couldn't find", "we could not find", "nothing to see here",
     "the user you are looking for", "this user does not exist", "user does not exist",
-    "profile unavailable", "this profile is unavailable", "is not available",
+    "profile unavailable", "this profile is unavailable",
     "seite nicht gefunden", "nicht gefunden", "página no encontrada", "страница не найдена",
     "пользователь не найден", "page introuvable", "pagina non trovata",
 )
@@ -314,6 +314,41 @@ LOGIN_HINTS = ("login", "signin", "sign-in", "signup", "sign-up", "register", "a
 # Whole path segments only: "/login", "/auth/", "/account/login?x" - not "/author/dan".
 _LOGIN_RX = re.compile(r"/(?:%s)(?:/|$)" % "|".join(re.escape(h) for h in LOGIN_HINTS))
 CONF_ORDER = {"High": 3, "Medium": 2, "Low": 1, "": 0}
+# Page text kept per result: enough for the soft-404 check, the preview and the
+# profile-picture finder, without holding megabytes for thousands of rows.
+TEXT_KEEP = 50000
+
+
+def error_types(v):
+    """A site's errorType as a list. Sherlock's data uses a plain string for most
+    sites but a list (e.g. ["message", "status_code"]) for some."""
+    if isinstance(v, (list, tuple)):
+        return [str(x) for x in v if x]
+    return [v] if v else []
+
+
+def detection_label(v):
+    """errorType for the Detection column: "message+status_code" for a list."""
+    return "+".join(error_types(v))
+
+
+def visible_text(html):
+    """Title + what a reader sees: scripts, styles and tags stripped. The soft-404
+    check must not read translation tables or bundled JS ("Page not found" sits
+    in the script of plenty of real profile pages)."""
+    import html as _html
+    body = re.sub(r"<(script|style|noscript|template)\b.*?</\1\s*>", " ", html or "", flags=re.I | re.S)
+    body = re.sub(r"<!--.*?-->", " ", body, flags=re.S)
+    body = re.sub(r"<[^>]+>", " ", body)
+    return re.sub(r"\s+", " ", _html.unescape(body)).strip()
+
+
+def soft404_hint(html):
+    """The first 'no such profile' phrase in the page's title or visible text, or None."""
+    title = _title_of(html).lower()
+    low = visible_text(html).lower()[:6000]
+    return next((h for h in SOFT404_HINTS if h in title), None) or \
+        next((h for h in SOFT404_HINTS if h in low), None)
 
 
 def _as_text(v):
@@ -379,8 +414,8 @@ def own_check(name, info, username, timeout=15, proxy=None, ua=VERIFY_UA):
     if isinstance(payload, dict):
         payload = json.dumps(payload).replace("{}", username)
         headers.setdefault("Content-Type", "application/json")
-    etype = info.get("errorType", "status_code")
-    allow_redirects = etype != "response_url"
+    etypes = error_types(info.get("errorType", "status_code")) or ["status_code"]
+    allow_redirects = "response_url" not in etypes
     proxies = {"http": proxy, "https": proxy} if proxy else None
     t0 = time.time()
     try:
@@ -396,30 +431,31 @@ def own_check(name, info, username, timeout=15, proxy=None, ua=VERIFY_UA):
     # redirect heuristic never treats an API probe as "landed somewhere else".
     out["final_url"] = r.url if r.url != req_url else url
     text = r.text or ""
-    out["text"] = text[:200000]
+    out["text"] = text[:TEXT_KEEP]
     if any(h in text for h in WAF_HINTS) or r.status_code in (403, 429):
         out["status"] = "WAF"
         return out
-    if etype == "message":
-        msgs = info.get("errorMsg") or []
-        if isinstance(msgs, str):
-            msgs = [msgs]
-        out["status"] = "Available" if any(m in text for m in msgs) else "Claimed"
-    elif etype == "status_code":
-        codes = info.get("errorCode")
-        if isinstance(codes, int):
-            codes = [codes]
-        if codes and r.status_code in codes:
-            out["status"] = "Available"
-        elif 200 <= r.status_code < 300:
-            out["status"] = "Claimed"
-        else:
-            out["status"] = "Available"
-    elif etype == "response_url":
-        out["status"] = "Claimed" if 200 <= r.status_code < 300 else "Available"
-    else:
+    # Several rules (errorType is a list for some sites): the profile is
+    # Available if any of them says so, Claimed only if none does.
+    verdicts = []
+    for etype in etypes:
+        if etype == "message":
+            msgs = info.get("errorMsg") or []
+            if isinstance(msgs, str):
+                msgs = [msgs]
+            verdicts.append(any(m in text for m in msgs))
+        elif etype == "status_code":
+            codes = info.get("errorCode")
+            if isinstance(codes, int):
+                codes = [codes]
+            verdicts.append(bool(codes and r.status_code in codes) or not (200 <= r.status_code < 300))
+        elif etype == "response_url":
+            verdicts.append(not (200 <= r.status_code < 300))
+    if not verdicts:
         out["status"] = "Unknown"
-        out["context"] = "unknown errorType %r" % etype
+        out["context"] = "unknown errorType %r" % info.get("errorType")
+    else:
+        out["status"] = "Available" if any(verdicts) else "Claimed"
     return out
 
 
@@ -466,24 +502,22 @@ def score(row, info, flaky_set):
     if isinstance(hs, int):
         if hs in (403, 429) or hs >= 500:
             down("Low", "HTTP %d (blocked/rate-limited)" % hs)
-        elif not (200 <= hs < 300) and info.get("errorType") == "status_code":
+        elif not (200 <= hs < 300) and "status_code" in error_types(info.get("errorType")):
             down("Low", "HTTP %d for a status-code site" % hs)
 
     text = row.get("text") or ""
     low = text.lower()
-    etype = info.get("errorType", row.get("detection", ""))
+    etypes = error_types(info.get("errorType")) or str(row.get("detection") or "").split("+")
     uname = row["username"].lower()
     if text:
         if any(h in text for h in WAF_HINTS):
             down("Low", "bot wall in page")
-        title = _title_of(text).lower()
-        hit = next((h for h in SOFT404_HINTS if h in title), None) or \
-            next((h for h in SOFT404_HINTS if h in low[:6000]), None)
+        hit = soft404_hint(text)
         if hit:
             down("Low", "page says '%s'" % hit)
         if uname not in low:
             down("Medium", "username not in page")
-        elif len(text) < 300 and etype == "status_code":
+        elif len(text) < 300 and "status_code" in etypes:
             down("Medium", "almost empty page")
     else:
         # Nothing to inspect (Maigret-only rows, or a Sherlock row before its page
@@ -493,7 +527,7 @@ def score(row, info, flaky_set):
     if _redirect_suspicious(row.get("url") or "", row.get("final_url") or ""):
         down("Low", "redirected to a generic/login page")
 
-    if etype == "response_url" and conf == "High":
+    if "response_url" in etypes and conf == "High":
         reasons.append("redirect-based check")
 
     am = row.get("avatar_matches") or []
@@ -551,8 +585,7 @@ def verify_row(row, info, timeout, proxy):
         return "Unclear", res
     txt = (res.get("text") or "")
     low = txt.lower()
-    title = _title_of(txt).lower()
-    if any(h in title for h in SOFT404_HINTS) or any(h in low[:6000] for h in SOFT404_HINTS):
+    if soft404_hint(txt):
         return "Failed", res
     if _redirect_suspicious(res.get("url") or "", res.get("final_url") or ""):
         return "Failed", res
@@ -782,7 +815,7 @@ class Runner(threading.Thread):
                     hs = int(hs) if hs not in ("", None) else None
                 except Exception:
                     hs = None
-                enrich[site] = {"http_status": hs, "text": _as_text(r.get("response_text"))[:200000],
+                enrich[site] = {"http_status": hs, "text": _as_text(r.get("response_text"))[:TEXT_KEEP],
                                 "url": r.get("url_user")}
             self.q.put(("enrich", "Sherlock", username, enrich))
         except Exception as e:
@@ -875,7 +908,7 @@ class Runner(threading.Thread):
                     if isinstance(v, dict):
                         ids.update(v)
                 enrich[site] = {
-                    "http_status": hs, "text": _as_text(r.get("response_text") or r.get("html"))[:200000],
+                    "http_status": hs, "text": _as_text(r.get("response_text") or r.get("html"))[:TEXT_KEEP],
                     "url": r.get("url_user"), "status": status, "similar": bool(r.get("is_similar")),
                     "ids": ids, "tags": list(getattr(r.get("site"), "tags", None) or []),
                     "url_main": r.get("url_main") or getattr(r.get("site"), "url_main", None),
