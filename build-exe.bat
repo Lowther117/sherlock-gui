@@ -74,6 +74,21 @@ for %%M in (maigret socid_extractor cloudscraper holehe httpx trio whois PIL) do
 echo       bundling extras:!EXTRA! >> "%LOG%"
 echo       bundling extras:!EXTRA!
 
+rem Some dependencies (tomli on Python 3.13+, for one) ship wheels compiled
+rem with mypyc. Their modules import a runtime library with a hashed name -
+rem c787785866c7b801238d__mypyc.pyd - that sits loose at the top of
+rem site-packages, outside any package, so PyInstaller never sees it and the
+rem app dies with "No module named ...__mypyc" the moment Sherlock imports
+rem tomli. Name every such library as a hidden import.
+set "MYPYC="
+for %%F in ("%VENV%\Lib\site-packages\*__mypyc*.pyd") do (
+    for /f "delims=." %%N in ("%%~nxF") do set "MYPYC=!MYPYC! --hidden-import %%N"
+)
+if defined MYPYC (
+    echo       mypyc runtimes:!MYPYC! >> "%LOG%"
+    echo       mypyc runtimes:!MYPYC!
+)
+
 rem The optional extras pull in their own dependencies - make sure none of them broke Sherlock.
 "%VPY%" check_sherlock.py >> "%LOG%" 2>&1 || (
     echo Installing the optional extras broke Sherlock - see build-win-log.txt
@@ -86,7 +101,7 @@ if exist "dist\%APP%" rmdir /s /q "dist\%APP%"
   --collect-all sherlock_project ^
   --copy-metadata sherlock-project ^
   --hidden-import sherlock_project.sherlock --hidden-import sherlock_project.sites --hidden-import sherlock_project.notify --hidden-import sherlock_project.result ^
-  --hidden-import tomli ^
+  --hidden-import tomli --collect-submodules tomli !MYPYC! ^
   --collect-all certifi ^
   --collect-all phonenumbers ^
   --collect-submodules dns ^

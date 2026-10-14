@@ -108,6 +108,18 @@ EXTRA=()
 for m in maigret socid_extractor cloudscraper holehe httpx trio whois PIL; do
     "$VPY" -c "import $m" >/dev/null 2>&1 && EXTRA+=(--collect-all "$m")
 done
+# Some dependencies (tomli on Python 3.13+, for one) ship wheels compiled with
+# mypyc. Their modules import a runtime library with a hashed name
+# (c787785866c7b801238d__mypyc.cpython-314-darwin.so) that sits loose at the
+# top of site-packages, outside any package, so PyInstaller never sees it and
+# the app dies with "No module named ...__mypyc" when Sherlock imports tomli.
+# Name every such library as a hidden import.
+for f in "$("$VPY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"/*__mypyc*.so; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f"); name=${name%%.*}
+    EXTRA+=(--hidden-import "$name")
+    echo "      mypyc runtime: $name" | tee -a "$LOG"
+done
 echo "      bundling extras: ${EXTRA[*]}"
 
 # The optional extras pull in their own dependencies - make sure none of them broke Sherlock.
@@ -122,7 +134,7 @@ rm -rf "dist/$APP.app" "dist/$APP"
     --collect-all sherlock_project \
     --copy-metadata sherlock-project \
     --hidden-import sherlock_project.sherlock --hidden-import sherlock_project.sites --hidden-import sherlock_project.notify --hidden-import sherlock_project.result \
-    --hidden-import tomli \
+    --hidden-import tomli --collect-submodules tomli \
     --collect-all certifi \
     --collect-all phonenumbers \
     --collect-submodules dns \
