@@ -242,6 +242,7 @@ def main():
             self.sort_col, self.sort_rev = "confidence", True
             self.total, self.done = 0, 0
             self._render_after = None
+            self._row_status_dirty = False
             self._iid_map = {}
             self.email_rows = []
             self.avatar_threads = []
@@ -1101,6 +1102,8 @@ def main():
             try:
                 for _ in range(600):
                     msg = self.q.get_nowait()
+                    if self._row_status_dirty and (not msg or msg[0] != "row"):
+                        self._flush_row_status()
                     try:
                         self._handle(msg)
                     except Exception as e:
@@ -1108,7 +1111,16 @@ def main():
                         self.logmsg("Internal error handling %r: %r" % (msg[0] if msg else msg, e))
             except queue.Empty:
                 pass
+            if self._row_status_dirty:
+                self._flush_row_status()
             self.root.after(100, self._poll)
+
+        def _flush_row_status(self):
+            # The claimed count walks every row, so it is computed once per batch of
+            # "row" messages rather than once per message (quadratic on big searches).
+            self._row_status_dirty = False
+            self.status_var.set("Checked %d / %d ... %d claimed so far." % (
+                self.done, self.total, sum(1 for r in self.rows if r["status"] == "Claimed")))
 
         def _merge_row(self, new):
             engine = new.get("engine", "?")
@@ -1191,8 +1203,7 @@ def main():
                 self._merge_row(msg[1])
                 self.done += 1
                 self.prog.configure(value=min(self.done, self.total) if self.total else 0)
-                self.status_var.set("Checked %d / %d ... %d claimed so far." % (
-                    self.done, self.total, sum(1 for r in self.rows if r["status"] == "Claimed")))
+                self._row_status_dirty = True
                 self._schedule_render()
             elif kind == "enrich":
                 _, engine, username, data = msg
