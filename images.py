@@ -117,14 +117,17 @@ def fetch(url, timeout=15, proxy=None, referer=None):
     if referer:
         headers["Referer"] = referer
     proxies = {"http": proxy, "https": proxy} if proxy else None
-    r = requests.get(url, headers=headers, timeout=timeout, proxies=proxies, stream=True, allow_redirects=True)
-    r.raise_for_status()
-    ct = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
-    buf = io.BytesIO()
-    for chunk in r.iter_content(65536):
-        buf.write(chunk)
-        if buf.tell() > MAX_BYTES:
-            raise ValueError("image larger than %d MB" % (MAX_BYTES // (1024 * 1024)))
+    # with-block: a streamed response that raises (HTTP error, too big) must
+    # still hand its connection back.
+    with requests.get(url, headers=headers, timeout=timeout, proxies=proxies, stream=True,
+                      allow_redirects=True) as r:
+        r.raise_for_status()
+        ct = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        buf = io.BytesIO()
+        for chunk in r.iter_content(65536):
+            buf.write(chunk)
+            if buf.tell() > MAX_BYTES:
+                raise ValueError("image larger than %d MB" % (MAX_BYTES // (1024 * 1024)))
     data = buf.getvalue()
     if not data:
         raise ValueError("empty response")

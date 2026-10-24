@@ -1001,6 +1001,7 @@ class AvatarFetcher(threading.Thread):
         self.rows, self.q, self.timeout, self.proxy = rows, q, timeout, proxy
         self.stop_flag = threading.Event()
         self._executor = None
+        self.done_posted = False
 
     def stop(self):
         self.stop_flag.set()
@@ -1046,6 +1047,7 @@ class AvatarFetcher(threading.Thread):
                 ex.shutdown(wait=False, cancel_futures=True)
                 self._executor = None
         finally:
+            self.done_posted = True
             self.q.put(("avatars_done", self.stop_flag.is_set()))
 
 

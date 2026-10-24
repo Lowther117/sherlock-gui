@@ -245,6 +245,7 @@ def main():
             self._row_status_dirty = False
             self._iid_map = {}
             self.email_rows = []
+            self._email_render_after = None
             self.avatar_threads = []
             self.image_file = None
             self.image_data = None
@@ -1296,7 +1297,10 @@ def main():
                 else:
                     self._image_loaded(data, ct, src)
             elif kind == "avatars_done":
-                self.avatar_threads = [t for t in self.avatar_threads if t.is_alive()]
+                # done_posted: this message can arrive before the thread that sent
+                # it has exited, and is_alive() alone would leave the button disabled.
+                self.avatar_threads = [t for t in self.avatar_threads
+                                       if t.is_alive() and not getattr(t, "done_posted", False)]
                 if not self.avatar_threads:
                     self.btn_avatars.configure(state="normal")
                 got = self._avatar_index_size()
@@ -1313,7 +1317,7 @@ def main():
                 self.email_rows.append(msg[1])
                 self.email_status.set("%d checks back, %d registered." % (
                     len(self.email_rows), sum(1 for r in self.email_rows if r["state"] == "Registered")))
-                self._render_email()
+                self._schedule_email_render()
             elif kind == "email_done":
                 self.eprog.stop()
                 self.btn_email.configure(state="normal")
@@ -1796,7 +1800,13 @@ def main():
                 self.email_thread.stop()
             self.btn_email_stop.configure(state="disabled")
 
+        def _schedule_email_render(self):
+            # holehe answers ~120 rows in a burst; rebuild the table once per burst, not per row.
+            if self._email_render_after is None:
+                self._email_render_after = self.root.after(150, self._render_email)
+
         def _render_email(self):
+            self._email_render_after = None
             only = self.email_only_var.get()
             self.etree.delete(*self.etree.get_children())
             order = {"Registered": 0, "Accepts mail": 0, "Rate limited": 1, "Unknown": 2, "Error": 3,
